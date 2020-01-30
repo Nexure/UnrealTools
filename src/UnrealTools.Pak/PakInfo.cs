@@ -5,17 +5,23 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using UnrealTools.Core;
+using UnrealTools.Core.Interfaces;
 using UnrealTools.Pak.Enums;
 
 namespace UnrealTools.Pak
 {
-    public sealed partial class PakInfo
+    internal sealed partial class PakInfo : IUnrealDeserializable
     {
         public bool IsUnrealPak => _magic == PakFile.Magic;
+        public bool IsEncrypted => _encryptedIndex != 0;
         public FArchive ReadIndex(Stream stream)
         {
             var memory = PakMemoryPool.Shared.Rent((int)_indexSize);
             stream.ReadWholeBuf(_indexOffset, memory.Memory.Span);
+
+            if (IsEncrypted && _aesProvider != null)
+                _aesProvider.Decrypt(memory.Memory);
+
             return new FArchive(memory)
             {
                 AssetVersion = (int)_version,
@@ -27,7 +33,10 @@ namespace UnrealTools.Pak
             var memory = PakMemoryPool.Shared.Rent((int)_indexSize);
             var val = stream.ReadWholeBufAsync(_indexOffset, memory.Memory, cancellationToken);
             if (!val.IsCompletedSuccessfully)
-                await val;
+                await val.ConfigureAwait(false);
+
+            if (IsEncrypted && _aesProvider != null)
+                _aesProvider.Decrypt(memory.Memory);
 
             return new FArchive(memory)
             {
@@ -35,8 +44,6 @@ namespace UnrealTools.Pak
                 AssetSubversion = GetPakSubversion(),
             };
         }
-
-        private const int CompressionMethodNameLen = 32;
 
         // TODO: Add stuff based on the backwards incompatible changes to pak format
         private int GetPakSubversion() => _infoSize switch
@@ -46,48 +53,15 @@ namespace UnrealTools.Pak
         };
 
         private PakInfo(PakInfoSize infoSize) => _infoSize = infoSize;
-        public PakInfo(Span<byte> data) : this((PakInfoSize)data.Length) => Deserialize(new SpanReader(data));
-        public PakInfo(Memory<byte> data) : this((PakInfoSize)data.Length) => Deserialize(new FArchive(data));
-
-        private void Deserialize(SpanReader reader)
+        internal PakInfo(Memory<byte> data) : this((PakInfoSize)data.Length) => Deserialize(new FArchive(data));
+        internal PakInfo(Memory<byte> data, AesPakCryptoProvider? aesProvider) : this((PakInfoSize)data.Length)
         {
-            reader.Read(out _encryptionIndexGuid);
-            reader.Read(out _encryptedIndex);
-            reader.Read(out _magic);
-            if (!IsUnrealPak)
-                return;
-
-            reader.Read(out _version);
-            reader.Read(out _indexOffset);
-            reader.Read(out _indexSize);
-            reader.Read(out Memory<byte> bytes, 20);
-            _indexHash = new SHA1Hash(bytes);
-            if (_version < PakVersion.IndexEncryption)
-                _encryptedIndex = 0;
-            if (_version < PakVersion.EncryptionKeyGuid)
-                _encryptionIndexGuid = default;
-
-            if (_version < PakVersion.FNameBasedCompressionMethod)
-            {
-                _compressionMethods.Add("Zlib");
-                _compressionMethods.Add("Gzip");
-                _compressionMethods.Add("Oodle");
-            }
-            else
-            {
-                reader.Read(out Span<byte> shit, reader.Remaining);
-                for (int Index = 0, start = 0; start < shit.Length; start = ++Index * CompressionMethodNameLen)
-                {
-                    var MethodString = shit.Slice(start, CompressionMethodNameLen);
-                    if (MethodString[0] != 0)
-                    {
-                        var chars = MemoryMarshal.Cast<byte, char>(MethodString.Slice(0, MethodString.IndexOf((byte)0)));
-                        _compressionMethods.Add(chars.ToString());
-                    }
-                }
-            }
+            _aesProvider = aesProvider;
+            using var ar = new FArchive(data);
+            Deserialize(ar);
         }
-        private void Deserialize(FArchive reader)
+
+        public void Deserialize(FArchive reader)
         {
             reader.Read(out _encryptionIndexGuid);
             reader.Read(out _encryptedIndex);
@@ -136,5 +110,8 @@ namespace UnrealTools.Pak
         private List<FName> _compressionMethods = new List<FName>();
 
         private PakInfoSize _infoSize;
+        private AesPakCryptoProvider? _aesProvider;
+
+        private const int CompressionMethodNameLen = 32;
     }
 }

@@ -18,10 +18,10 @@ namespace UnrealTools.Objects
         public int ArrayIndex { get => _arrayIndex; set => _arrayIndex = value; }
 
         public bool BoolValue { get => _boolVal != 0; set => _boolVal = (byte)(value ? 1 : 0); }
-        public FName StructName { get => _structName; set => _structName = value; }
-        public FName EnumName { get => _enumName; set => _enumName = value; }
-        public FName InnerType { get => _innerType; set => _innerType = value; }
-        public FName ValueType { get => _valueType; set => _valueType = value; }
+        public FName? StructName { get => _structName; set => _structName = value; }
+        public FName? EnumName { get => _enumName; set => _enumName = value; }
+        public FName? InnerType { get => _innerType; set => _innerType = value; }
+        public FName? ValueType { get => _valueType; set => _valueType = value; }
 
         public PropertyType TypeEnum => _typeEnum;
         public PropertyType InnerTypeEnum => _innerTypeEnum;
